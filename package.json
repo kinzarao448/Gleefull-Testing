@@ -1,0 +1,18 @@
+{
+  "name": "gleefull-daily-qa",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/config.test.mjs tests/server.integration.test.mjs tests/runner.integration.test.mjs",
+    "qa": "playwright test",
+    "qa:report": "playwright show-report test-results/playwright-report"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.56.1",
+    "pixelmatch": "^8.0.0",
+    "pngjs": "^7.0.0"
+  }
+}

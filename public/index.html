@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f1f4ef">
+  <title>GleeFull QA | Regression dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>body{font-family:"Trebuchet MS",sans-serif}.layout{grid-template-columns:204px minmax(0,1fr)}main{min-width:0}.shot-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:10px 12px 14px}.shot-pair figure{min-width:0;margin:0;border:1px solid #dbe2dc;background:#f7f9f6}.shot-pair figcaption{padding:6px 8px;color:#68776e;font-size:9px;font-weight:700}.shot-pair a{display:block}.shot-pair img{display:block;width:100%;height:clamp(130px,22vw,270px);object-fit:contain;object-position:top center;background:#e9eee8}.check-details{padding:8px 12px}.check-details p{overflow-wrap:anywhere}@media(max-width:1050px){.layout{grid-template-columns:minmax(0,1fr)}}@media(max-width:520px){.shot-pair{grid-template-columns:1fr}.shot-pair img{height:240px}}</style>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#overview" aria-label="GleeFull QA home"><span class="brand-mark">G</span><span>GLEEFULL <i>/ QA</i></span></a>
+    <div class="topbar-right"><span class="local-status"><i></i> Local workspace</span><button class="button button-quiet" id="loadDemo" type="button">Load safe demo</button></div>
+  </header>
+  <div class="layout">
+    <aside class="sidebar" aria-label="Main navigation">
+      <p class="nav-caption">WORKSPACE</p>
+      <a class="nav-link active" href="#overview"><span aria-hidden="true">◫</span> Overview</a>
+      <a class="nav-link" href="#pages"><span aria-hidden="true">▤</span> Pages</a>
+      <a class="nav-link" href="#run"><span aria-hidden="true">▷</span> Run tests</a>
+      <a class="nav-link" href="#tasks"><span aria-hidden="true">⌘</span> Task specs</a>
+      <a class="nav-link" href="#results"><span aria-hidden="true">≋</span> Results</a>
+      <a class="nav-link" href="#history"><span aria-hidden="true">◷</span> History</a>
+      <div class="sidebar-foot"><strong>Release routine</strong><br>Changed page: preview + Figma.<br>Other pages: preview + live reference.<br><br>Checkout and order placement are excluded.</div>
+    </aside>
+
+    <main>
+      <section class="page-heading" id="overview">
+        <div><p class="eyebrow">STOREFRONT QUALITY · REGRESSION</p><h1>QA overview</h1><p class="lede">Compare the release preview with live, review visual changes, and keep every run on record.</p></div>
+        <div class="date-line" id="today"></div>
+      </section>
+
+      <section class="summary-grid" aria-label="Latest test summary">
+        <article class="metric"><span class="metric-label">Configured pages</span><strong id="metricPages">0</strong><small id="metricEnabled">0 enabled</small></article>
+        <article class="metric"><span class="metric-label">Last run passed</span><strong id="metricPassed">—</strong><small id="metricRun">No runs yet</small></article>
+        <article class="metric"><span class="metric-label">Failed checks</span><strong id="metricFailed">—</strong><small id="metricFunctional">Functional: —</small></article>
+        <article class="metric"><span class="metric-label">Visual differences</span><strong id="metricVisual">—</strong><small id="metricA11y">Accessibility: —</small></article>
+      </section>
+
+      <section class="panel config-panel" aria-labelledby="configHeading">
+        <div class="section-heading"><div><p class="eyebrow">CONFIGURATION</p><h2 id="configHeading">Environments and run defaults</h2></div><button class="button button-primary" id="saveConfig" type="button">Save settings</button></div>
+        <div class="config-fields">
+          <label>Live/reference base URL<input id="liveBaseUrl" type="url" placeholder="https://live.example.com"></label>
+          <label>Preview base URL<input id="previewBaseUrl" type="url" placeholder="https://preview.example.com"></label>
+          <label>Production base URL<input id="productionBaseUrl" type="url" placeholder="https://shop.example.com"></label>
+          <label>Visual threshold (%)<input id="visualThreshold" type="number" min="0" max="100" step="0.1"></label>
+          <label>Keep last runs<input id="historyRetention" type="number" min="1" max="365" step="1"></label>
+        </div>
+        <p class="microcopy">Base URLs prefill new page records only. Saved page URLs are explicit per environment, so different route structures are supported.</p>
+      </section>
+
+      <section class="section-block" id="pages">
+        <div class="section-heading"><div><p class="eyebrow">SAVED ROUTES</p><h2>Page configuration</h2></div><div class="actions"><button class="button" id="exportJson" type="button">Export JSON</button><button class="button" id="exportCsv" type="button">Export CSV</button><label class="button file-button" for="importFile">Import pages</label><input id="importFile" type="file" accept=".json,.csv,application/json,text/csv" hidden><button class="button button-primary" id="addPage" type="button">+ Add page</button></div></div>
+        <div class="table-wrap"><table><thead><tr><th><input id="selectAllPages" type="checkbox" aria-label="Select all enabled pages"></th><th>Page</th><th>Live / reference</th><th>Preview</th><th>Production</th><th>State</th><th></th></tr></thead><tbody id="pagesBody"><tr><td colspan="7" class="empty-state">No pages saved yet. Add a page or load the local demo.</td></tr></tbody></table></div>
+        <p class="microcopy" id="pageCountHint">Configure exact URLs for each environment. Page paths do not need to match.</p>
+      </section>
+
+      <section class="panel runner-panel" id="run">
+        <div class="section-heading"><div><p class="eyebrow">TEST EXECUTION</p><h2>Run selected pages</h2></div><span class="run-pill" id="runState">Ready</span></div>
+        <div class="run-controls">
+          <label>Target environment<select id="environment"><option value="preview">Preview</option><option value="production">Production</option></select></label>
+          <label>Test mode<select id="mode"><option value="full">Full regression · UI + functional</option><option value="ui">UI only · screenshots + layout</option><option value="functional">Functional only · no pixel diff</option><option value="task">Specific approved task</option></select></label>
+          <label>Viewport profile<select id="viewports"><option value="desktop">Desktop · 1440 × 1000</option><option value="mobile">Mobile · 390 × 844</option><option value="both">Desktop + mobile</option></select></label>
+          <label id="taskPickerLabel" hidden>Approved task<select id="taskPicker"><option value="">Choose a task</option></select></label>
+        </div>
+        <div class="run-options"><label class="checkline"><input id="accessibility" type="checkbox"> Include axe accessibility scan (WCAG 2.1 A/AA)</label><label class="checkline authorization"><input id="authorized" type="checkbox"> I own or am authorized to test these URLs</label></div>
+        <div class="run-footer"><div><p id="runHint">Full regression checks page health, internal links, responsive layout, and live-reference visual differences.</p><p class="microcopy">Specific tasks run only on Preview. Runs do not submit forms, enter checkout, or place orders.</p></div><div class="actions"><button class="button button-danger" id="cancelRun" type="button" hidden>Cancel run</button><button class="button button-primary button-run" id="startRun" type="button">Start test run</button></div></div>
+        <div class="progress-area" id="progressArea" hidden><div class="progress-label"><span id="progressText">Preparing browser</span><span id="progressPercent">0%</span></div><progress id="progressBar" max="100" value="0"></progress></div>
+      </section>
+
+      <section class="section-block" id="tasks">
+        <div class="section-heading"><div><p class="eyebrow">APPROVED STEPS</p><h2>Task-specific tests</h2></div><button class="button button-primary" id="addTask" type="button">+ New task spec</button></div>
+        <p class="microcopy section-copy">Describe the expected outcome and save executable, editable Playwright steps. Ambiguous outcomes must be clarified before you approve a task.</p>
+        <div id="tasksList" class="task-list"><p class="empty-state">No task specifications yet.</p></div>
+      </section>
+
+      <section class="section-block" id="results">
+        <div class="section-heading"><div><p class="eyebrow">LATEST RUN</p><h2>Results and issues</h2></div><div class="actions"><button class="button" id="downloadJson" type="button" disabled>Download JSON</button><button class="button" id="downloadCsv" type="button" disabled>Export issues CSV</button></div></div>
+        <div id="resultsSummary" class="results-summary"><p class="empty-state">Run tests to see page results, categorized issues, and screenshot evidence here.</p></div>
+        <div id="resultsList" class="results-list"></div>
+      </section>
+
+      <section class="section-block" id="history">
+        <div class="section-heading"><div><p class="eyebrow">LOCAL ARCHIVE</p><h2>Run history</h2></div><span id="retentionLabel" class="microcopy">Reports stay on this computer.</span></div>
+        <div id="historyList" class="history-list"><p class="empty-state">No saved runs.</p></div>
+      </section>
+
+      <footer><span>Local QA workspace · Configuration and reports are stored on this computer.</span><a href="/TEST-CASES.md" target="_blank" rel="noreferrer">Open test case guide</a><a href="/README.md" target="_blank" rel="noreferrer">Setup and usage</a></footer>
+      <div id="toast" role="status" aria-live="polite" class="toast" hidden></div>
+    </main>
+  </div>
+
+  <dialog id="pageDialog"><form id="pageForm" method="dialog" class="dialog-form"><div class="dialog-head"><div><p class="eyebrow">SAVED URL RECORD</p><h2 id="pageDialogTitle">Add page</h2></div><button class="icon-button" type="button" data-close="pageDialog" aria-label="Close">×</button></div><input type="hidden" id="pageId"><div class="dialog-grid"><label>Page name<input id="pageName" required maxlength="100" placeholder="Product page"></label><label class="checkline"><input id="pageEnabled" type="checkbox" checked> Enabled for regression</label><label>Live/reference URL<input id="pageLive" type="url" placeholder="https://live.example.com/pages/path"></label><label>Preview URL<input id="pagePreview" type="url" placeholder="https://preview.example.com/different-path"></label><label>Production URL<input id="pageProduction" type="url" placeholder="https://shop.example.com/pages/path"></label><label>Figma frame/prototype URL<input id="pageFigma" type="url" placeholder="https://www.figma.com/design/..."></label><label>Expected title includes<input id="pageExpectedTitle" maxlength="200"></label><label>Expected H1 includes<input id="pageExpectedHeading" maxlength="200"></label><label class="span-all">Dynamic content selectors to mask (one CSS selector per line)<textarea id="pageMasks" rows="3" placeholder=".rotating-banner&#10;.personalized-recommendations"></textarea></label></div><p class="microcopy">Use only URLs you own or have permission to test. Credentials in URL fields are rejected.</p><div class="dialog-actions"><button class="button" type="button" data-close="pageDialog">Cancel</button><button class="button button-primary" type="submit">Save page</button></div></form></dialog>
+
+  <dialog id="taskDialog"><form id="taskForm" method="dialog" class="dialog-form"><div class="dialog-head"><div><p class="eyebrow">TASK SPECIFICATION</p><h2 id="taskDialogTitle">Create task</h2></div><button class="icon-button" type="button" data-close="taskDialog" aria-label="Close">×</button></div><input type="hidden" id="taskId"><label>Task name<input id="taskName" required maxlength="120" placeholder="Product CTA opens details"></label><label>Associated page<select id="taskPage" required></select></label><label>Expected result<textarea id="taskExpected" required rows="2" placeholder="The product detail page opens and its title is visible."></textarea></label><label>Executable steps · JSON<textarea id="taskSteps" required rows="7" spellcheck="false">[
+  { "action": "clickRole", "value": "link", "name": "Shop now" },
+  { "action": "expectText", "value": "Product name" }
+]</textarea></label><label class="checkline"><input id="taskApproved" type="checkbox"> I reviewed these steps and approve running them on Preview.</label><p class="microcopy">Actions: clickRole, clickText, fillLabel, expectText, expectUrl. Order, purchase, and checkout actions are blocked. Tasks are never run against Production.</p><div class="dialog-actions"><button class="button" type="button" data-close="taskDialog">Cancel</button><button class="button button-primary" type="submit">Save task spec</button></div></form></dialog>
+</body>
+</html>

@@ -13,7 +13,7 @@ const fixture = (preview, heading = 'Demo product', brokenExpandable = false) =>
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runner demo</title><style>body{margin:0;color:#173c32;font:16px Georgia,serif;background:${preview ? '#e4edce' : '#fff'}}main{min-height:80vh;display:grid;place-content:center;text-align:center;padding:30px}h1{font-size:48px}button{padding:12px 18px;background:#174c39;color:white;border:0;cursor:pointer}</style></head><body><main><h1>${heading}</h1><button onclick="document.querySelector('#state').textContent='Demo item added'">Add to cart</button><button type="button" aria-expanded="false" onclick="${toggle}">Toggle details</button><p id="state" aria-live="polite"></p></main></body></html>`;
 };
 
-function runRunner(inputPath, { cancelAfterMs } = {}) {
+function runRunner(inputPath, { cancelOnRequest } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(root, 'qa', 'runner.mjs'), inputPath], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
@@ -21,15 +21,18 @@ function runRunner(inputPath, { cancelAfterMs } = {}) {
     child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
     const timer = setTimeout(() => child.kill('SIGKILL'), 90_000);
-    const cancelTimer = cancelAfterMs ? setTimeout(() => child.kill('SIGTERM'), cancelAfterMs) : null;
+    let cancelTimer;
+    cancelOnRequest?.then(() => { cancelTimer = setTimeout(() => child.kill('SIGTERM'), 50); });
     child.on('error', reject);
     child.on('close', (status, signal) => { clearTimeout(timer); clearTimeout(cancelTimer); resolve({ status, signal, stdout, stderr }); });
   });
 }
 
 test('runner creates pixel diff evidence and reports an explicit task failure', { timeout: 120_000 }, async () => {
+  let resolveHangRequest;
+  const hangRequested = new Promise((resolve) => { resolveHangRequest = resolve; });
   const server = http.createServer((request, response) => {
-    if (request.url === '/hang') return;
+    if (request.url === '/hang') { resolveHangRequest(); return; }
     if (request.url === '/broken-reference') {
       response.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('Reference temporarily unavailable');
@@ -93,8 +96,11 @@ test('runner creates pixel diff evidence and reports an explicit task failure', 
   const cancelPage = { ...page, previewUrl: `${base}/hang` };
   await fs.writeFile(path.join(cancelDir, 'input.json'), JSON.stringify({ ...input, runId: cancelRunId, mode: 'functional', pages: [cancelPage], accessibility: false }));
   const cancelStarted = Date.now();
-  const cancelResult = await runRunner(path.join(cancelDir, 'input.json'), { cancelAfterMs: 1_500 });
+  const cancelResult = await runRunner(path.join(cancelDir, 'input.json'), { cancelOnRequest: hangRequested });
   assert.equal(cancelResult.signal, null, cancelResult.stderr || cancelResult.stdout);
+  assert.equal(cancelResult.status, 0, cancelResult.stderr || cancelResult.stdout);
+  const cancelStatus = JSON.parse(await fs.readFile(path.join(cancelDir, 'status.json'), 'utf8'));
+  assert.equal(cancelStatus.status, 'cancelled');
   const cancelReport = JSON.parse(await fs.readFile(path.join(cancelDir, 'report.json'), 'utf8'));
   assert.equal(cancelReport.status, 'cancelled');
   assert.ok(Date.now() - cancelStarted < 12_000, 'cancel should interrupt navigation instead of waiting for its full timeout');

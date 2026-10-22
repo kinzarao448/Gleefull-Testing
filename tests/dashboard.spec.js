@@ -73,3 +73,23 @@ test('runs both regressions for each saved pair and reports where issues occur',
   expect(detail.checks.some((check) => check.title.includes('Links and buttons are named'))).toBe(true);
   expect(detail.checks.some((check) => check.title.includes('Safe expandable button interactions'))).toBe(true);
 });
+
+test('keeps a run locked and reconnects after a transient status error', { timeout: 60_000 }, async ({ page, request }) => {
+  const origin = 'http://127.0.0.1:4174';
+  await request.put('/api/pairs', { data: { pairs: [{ id: 'poll-retry', previewUrl: `${origin}/demo/changed`, liveUrl: `${origin}/demo/reference` }] } });
+  let firstStatusRead = true;
+  await page.route('**/api/runs/*', async (route) => {
+    if (firstStatusRead) {
+      firstStatusRead = false;
+      await route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'Temporary status outage.' }) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Run Regression Tests' }).click();
+  await expect(page.locator('#progressLabel')).toContainText('retrying');
+  await expect(page.getByRole('button', { name: 'Run Regression Tests' })).toBeDisabled();
+  await expect(page.locator('.page-result')).toHaveCount(1, { timeout: 30_000 });
+  await expect(page.getByRole('button', { name: 'Run Regression Tests' })).toBeEnabled();
+});

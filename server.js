@@ -15,6 +15,7 @@ const RUNS = path.join(DATA, 'runs');
 const PAIRS = path.join(DATA, 'pairs.json');
 let activeChild = null;
 let activeRunId = null;
+let activeRunPhase = null;
 
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml' };
 const json = (response, status, body) => {
@@ -92,15 +93,19 @@ async function launchRun(response, { environment, mode, pages, task = null, view
   await writeJson(runPath(runId, 'input.json'), runInput);
   await writeJson(runPath(runId, 'status.json'), { runId, status: 'running', current: 'Preparing browser', startedAt: runInput.startedAt, progress: 0 });
   activeRunId = runId;
+  activeRunPhase = 'running';
   activeChild = spawn(process.execPath, [path.join(ROOT, 'qa', 'runner.mjs'), runPath(runId, 'input.json')], { cwd: ROOT, stdio: ['ignore', 'ignore', 'pipe'], env: process.env });
   let lastError = '';
+  activeChild.on('error', (error) => { lastError = error.message; });
   activeChild.stderr.on('data', (chunk) => { lastError = (lastError + chunk.toString()).slice(-8000); });
   activeChild.on('close', async (code, signal) => {
+    activeRunPhase = 'finalizing';
     try {
       const report = await readJson(runPath(runId, 'report.json'), null);
       const status = await readJson(runPath(runId, 'status.json'), {});
       if (report) {
-        report.status = signal ? 'cancelled' : code === 0 ? 'completed' : 'infrastructure-error';
+        const wasCancelled = signal === 'SIGTERM' || report.status === 'cancelled' || status.status === 'cancelled';
+        report.status = wasCancelled ? 'cancelled' : code === 0 ? 'completed' : 'infrastructure-error';
         report.finishedAt = new Date().toISOString();
         if (lastError && code !== 0) report.runnerError = lastError;
         const history = await getHistory();
@@ -124,13 +129,39 @@ async function launchRun(response, { environment, mode, pages, task = null, view
         for (const oldRun of history.slice(keep)) await fs.rm(runPath(oldRun.runId), { recursive: true, force: true });
         await writeJson(dataPath('history.json'), history.slice(0, keep));
       } else {
-        await writeJson(runPath(runId, 'status.json'), { ...status, status: signal ? 'cancelled' : 'infrastructure-error', error: lastError || `Runner exited with code ${code}.` });
+        const wasCancelled = signal === 'SIGTERM' || status.status === 'cancelled';
+        const finishedAt = new Date().toISOString();
+        const terminalStatus = wasCancelled ? 'cancelled' : 'infrastructure-error';
+        const summary = { pages: 0, passed: 0, failed: 0, issues: 0, visualDifferences: 0, functionalFailures: 0, accessibilityViolations: 0 };
+        const fallbackReport = {
+          runId,
+          status: terminalStatus,
+          environment,
+          mode,
+          viewports,
+          startedAt: runInput.startedAt,
+          finishedAt,
+          durationMs: Date.now() - Date.parse(runInput.startedAt),
+          pages: [],
+          checks: [],
+          summary,
+          runnerError: lastError || (wasCancelled ? 'Cancelled before the browser runner produced a report.' : `Runner exited with code ${code} before producing a report.`),
+        };
+        await writeJson(runPath(runId, 'report.json'), fallbackReport);
+        await writeJson(runPath(runId, 'status.json'), { ...status, runId, status: terminalStatus, current: wasCancelled ? 'Cancelled' : 'Runner failed', progress: 100, error: fallbackReport.runnerError, summary });
+        await fs.writeFile(runPath(runId, 'report.html'), `<!doctype html><html lang="en"><meta charset="utf-8"><title>QA run ${runId}</title><body><h1>QA run ${terminalStatus}</h1><p>${fallbackReport.runnerError}</p></body></html>`);
+        const history = await getHistory();
+        history.unshift({ runId, status: terminalStatus, environment, mode, startedAt: runInput.startedAt, finishedAt, pageCount: 0, passed: 0, failed: 0, issues: 0, visualDifferences: 0, functionalFailures: 0, accessibilityViolations: 0, durationMs: fallbackReport.durationMs });
+        const keep = runInput.config.historyRetention;
+        for (const oldRun of history.slice(keep)) await fs.rm(runPath(oldRun.runId), { recursive: true, force: true });
+        await writeJson(dataPath('history.json'), history.slice(0, keep));
       }
     } catch (error) {
       console.error('Could not finalize test run:', error);
     }
     activeChild = null;
     activeRunId = null;
+    activeRunPhase = null;
   });
   return json(response, 202, { runId, status: 'running' });
 }
@@ -177,7 +208,9 @@ async function runRoute(request, response, url) {
     const id = url.pathname.split('/')[3];
     if (id === activeRunId && activeChild) {
       const status = await readJson(runPath(id, 'status.json'), { runId: id });
-      return json(response, 200, { ...status, status: 'running', current: 'Finalizing report and history', progress: 99 });
+      if (activeRunPhase === 'finalizing') return json(response, 200, { ...status, status: 'running', current: 'Finalizing report and history', progress: 99 });
+      if (status.status !== 'running') return json(response, 200, { ...status, status: 'running', current: status.current || 'Finishing browser checks' });
+      return json(response, 200, status);
     }
     const report = await readJson(runPath(id, 'report.json'), null);
     const state = await readJson(runPath(id, 'status.json'), null);

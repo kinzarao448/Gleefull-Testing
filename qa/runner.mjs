@@ -23,7 +23,11 @@ process.on('SIGTERM', () => {
   cancelled = true;
   browser?.close().catch(() => {});
 });
-const writeStatus = async (status) => fs.writeFile(statusFile, JSON.stringify(status, null, 2));
+const writeStatus = async (status) => {
+  const temporaryFile = `${statusFile}.${process.pid}.tmp`;
+  await fs.writeFile(temporaryFile, JSON.stringify(status, null, 2));
+  await fs.rename(temporaryFile, statusFile);
+};
 const slug = (value) => String(value).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 48) || 'page';
 const evidencePath = (filename) => `runs/${input.runId}/artifacts/${filename}`;
 const evidenceUrl = (runId, filename) => `/api/evidence/${runId}/artifacts/${filename}`;
@@ -41,8 +45,11 @@ function addIssue(page, environment, category, title, summary, expected, actual,
 async function updateScreenshotStable(page) {
   await page.locator('body').waitFor({ state: 'visible', timeout: 12_000 });
   await page.evaluate(async () => {
-    if (document.fonts?.ready) await document.fonts.ready;
-    await Promise.all([...document.images].map((image) => image.decode().catch(() => {})));
+    const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+    const fonts = document.fonts?.ready || Promise.resolve();
+    const loadedImages = [...document.images].filter((image) => image.complete || image.loading !== 'lazy');
+    const images = loadedImages.map((image) => Promise.race([image.decode().catch(() => {}), delay(1_800)]));
+    await Promise.race([Promise.all([Promise.race([fonts, delay(2_000)]), ...images]), delay(5_000)]);
   });
 }
 async function capture(page, filename, ignoreSelectors = []) {
@@ -88,7 +95,7 @@ async function applyTask(page, task) {
     else if (step.action === 'expectUrl') await page.waitForURL(new RegExp(step.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 }
-async function checkInternalLinks(page, pageConfig, environment, report) {
+async function checkInternalLinks(page, pageConfig, environment, report, onProgress = () => {}) {
   const base = page.url();
   const links = await page.locator('a[href]').evaluateAll((anchors) => anchors.map((anchor) => ({ href: anchor.href, name: (anchor.innerText || anchor.getAttribute('aria-label') || '').trim().slice(0, 100) })));
   const ignored = /\/checkout|\/cart\/add|\/account\/logout|\/challenge|\/apps\/track/i;
@@ -96,11 +103,17 @@ async function checkInternalLinks(page, pageConfig, environment, report) {
     try { const url = new URL(link.href); return url.origin === new URL(base).origin && url.protocol.startsWith('http') && !ignored.test(url.pathname); } catch { return false; }
   }).map((link) => [link.href, link])).values()].slice(0, 40);
   const failures = [];
-  for (const link of unique) {
-    try {
-      const response = await page.request.get(link.href, { timeout: 12_000, maxRedirects: 5 });
-      if (response.status() === 404 || response.status() >= 500) failures.push(`${response.status()} ${link.href}${link.name ? ` (${link.name})` : ''}`);
-    } catch (error) { failures.push(`${error.message.split('\n')[0]} ${link.href}`); }
+  const batchSize = 6;
+  for (let offset = 0; offset < unique.length; offset += batchSize) {
+    const batch = unique.slice(offset, offset + batchSize);
+    const outcomes = await Promise.all(batch.map(async (link) => {
+      try {
+        const response = await page.request.get(link.href, { timeout: 5_000, maxRedirects: 3 });
+        return response.status() === 404 || response.status() >= 500 ? `${response.status()} ${link.href}${link.name ? ` (${link.name})` : ''}` : '';
+      } catch (error) { return `${error.message.split('\n')[0]} ${link.href}`; }
+    }));
+    failures.push(...outcomes.filter(Boolean));
+    await onProgress(Math.min(offset + batch.length, unique.length), unique.length);
   }
   const record = addCheck(pageConfig, 'functional', 'Internal navigation destinations', failures.length === 0, failures.length ? failures.join('; ') : `${unique.length} internal destinations responded successfully or with an expected restricted status.`, 'Internal content links should not return 404 or 5xx.', []);
   if (!record.status || failures.length) report.issues.push(addIssue(pageConfig, environment, 'functional', 'Broken internal destination', 'One or more same-origin page links could not be reached or returned an unexpected server error.', 'Linked content pages return successfully.', failures.join('\n'), 'Medium', [], ['Open the page URL.', 'Follow the listed internal link.', 'Confirm whether the destination should exist.']));
@@ -115,6 +128,7 @@ async function runPage(browser, pageConfig, index) {
 
   for (const viewport of input.viewports) {
     if (cancelled) break;
+    await writeStatus({ runId: input.runId, status: 'running', current: `${pageConfig.name} · ${viewport}: loading page`, progress: Math.round(index / input.pages.length * 100), completedPages: index, totalPages: input.pages.length });
     const context = await browser.newContext({ viewport: viewportSize[viewport], deviceScaleFactor: 1, reducedMotion: 'reduce', colorScheme: 'light' });
     const target = await context.newPage();
     target.setDefaultTimeout(5_000);
@@ -161,7 +175,11 @@ async function runPage(browser, pageConfig, index) {
     }
 
     if (runFunctional) {
-      if (viewport === input.viewports[0]) await checkInternalLinks(target, pageConfig, input.environment, report);
+      if (viewport === input.viewports[0]) await checkInternalLinks(target, pageConfig, input.environment, report, async (checked, total) => {
+        const fraction = total ? checked / total : 1;
+        const progress = Math.round(((index + fraction * 0.4) / input.pages.length) * 100);
+        await writeStatus({ runId: input.runId, status: 'running', current: `${pageConfig.name} · checked ${checked}/${total} internal links`, progress, completedPages: index, totalPages: input.pages.length });
+      });
       const controlSummary = await target.locator('a[href],button').evaluateAll((elements) => ({
         count: elements.length,
         unnamed: elements.filter((element) => !(element.innerText || element.getAttribute('aria-label') || element.getAttribute('title') || '').trim()).length,
@@ -321,8 +339,12 @@ try {
     await runPage(browser, page, index);
   }
 } catch (error) {
-  await writeStatus({ runId: input.runId, status: 'infrastructure-error', current: 'Browser setup', error: error.stack || error.message, progress: 0 });
-  process.exitCode = 1;
+  if (cancelled) {
+    await writeStatus({ runId: input.runId, status: 'cancelled', current: 'Cancelled', progress: 0 });
+  } else {
+    await writeStatus({ runId: input.runId, status: 'infrastructure-error', current: 'Browser setup', error: error.stack || error.message, progress: 0 });
+    process.exitCode = 1;
+  }
 } finally {
   await browser?.close().catch(() => {});
 }

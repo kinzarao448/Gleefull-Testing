@@ -9,11 +9,16 @@ let saveTimer = null;
 let saveQueue = Promise.resolve();
 let toastTimer = null;
 let pairRevision = 0;
+let pollFailures = 0;
 
 async function api(url, options = {}) {
   const response = await fetch(url, { headers: { 'content-type': 'application/json', ...(options.headers || {}) }, ...options });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+  if (!response.ok) {
+    const error = new Error(result.error || `Request failed (${response.status}).`);
+    error.status = response.status;
+    throw error;
+  }
   return result;
 }
 function notify(message, isError = false) {
@@ -103,6 +108,7 @@ async function runRegression() {
     const result = await api('/api/pair-runs', { method: 'POST', body: JSON.stringify({ pairs }) });
     currentRunId = result.runId;
     currentReport = null;
+    pollFailures = 0;
     $('#summary').innerHTML = '<p class="empty-state">Regression is running. Each URL pair is checked independently.</p>';
     $('#issueList').replaceChildren();
     $('#htmlReport').hidden = true;
@@ -114,6 +120,7 @@ async function pollRun() {
   if (!currentRunId) return;
   try {
     const run = await api(`/api/runs/${encodeURIComponent(currentRunId)}`);
+    pollFailures = 0;
     if (run.status === 'running') {
       $('#progressLabel').textContent = run.current || 'Checking pages';
       $('#progressPercent').textContent = `${run.progress ?? 0}%`;
@@ -129,11 +136,18 @@ async function pollRun() {
     $('#htmlReport').href = `/api/evidence/${encodeURIComponent(run.runId)}/report.html`;
     $('#htmlReport').hidden = false;
     $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    notify(run.summary.issues ? `Run complete: ${run.summary.issues} issue(s) need review.` : 'Run complete: no issues found.');
+    notify(run.status === 'cancelled' ? 'Run cancelled. Partial results are shown.' : run.summary.issues ? `Run complete: ${run.summary.issues} issue(s) need review.` : 'Run complete: no issues found.');
   } catch (error) {
-    setRunning(false);
-    $('#summary').innerHTML = `<p class="run-error">${escapeHtml(error.message)}</p>`;
-    notify(error.message, true);
+    if (error.status === 404) {
+      setRunning(false);
+      $('#runRegression').disabled = false;
+      $('#summary').innerHTML = `<p class="run-error">${escapeHtml(error.message)}</p>`;
+      notify(error.message, true);
+      return;
+    }
+    pollFailures += 1;
+    $('#progressLabel').textContent = `Connection interrupted · retrying (${pollFailures})`;
+    setTimeout(pollRun, 1_000);
   }
 }
 function renderReport(report) {

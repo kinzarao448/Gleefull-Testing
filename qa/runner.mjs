@@ -140,6 +140,10 @@ async function runPage(browser, pageConfig, index) {
     addCheck(pageConfig, 'functional', `${viewport} target page loads`, statusOk, `HTTP ${targetResponse?.status() ?? 'no response'}`, 'HTTP response below 400.');
     if (!statusOk) report.issues.push(addIssue(pageConfig, input.environment, 'network/runtime', 'Unexpected target response', 'The configured page returned an HTTP error response.', 'HTTP response below 400.', `HTTP ${targetResponse?.status() ?? 'no response'}`, targetResponse?.status() >= 500 ? 'High' : 'Medium'));
 
+    const navigationMs = await target.evaluate(() => Math.round(performance.getEntriesByType('navigation')[0]?.domContentLoadedEventEnd || 0));
+    addCheck(pageConfig, 'performance', `${viewport} DOM ready time`, navigationMs <= 15_000, `${navigationMs} ms`, 'DOM content becomes available within 15 seconds.');
+    if (navigationMs > 15_000) report.issues.push(addIssue(pageConfig, input.environment, 'performance', 'Slow initial page load', 'The page took more than 15 seconds to reach DOMContentLoaded.', 'DOM content becomes available within 15 seconds.', `${navigationMs} ms`, 'Medium', [], [`Open ${targetUrl}`, 'Review server response time and blocking resources.']));
+
     const title = await target.title().catch(() => '');
     const heading = (await target.locator('h1').first().innerText().catch(() => '')).trim();
     const structureOk = await target.locator('main').count().then((count) => count > 0).catch(() => false) && Boolean(heading);
@@ -158,9 +162,42 @@ async function runPage(browser, pageConfig, index) {
 
     if (runFunctional) {
       if (viewport === input.viewports[0]) await checkInternalLinks(target, pageConfig, input.environment, report);
-      const unlabeled = await target.locator('a[href],button').evaluateAll((elements) => elements.filter((element) => !(element.innerText || element.getAttribute('aria-label') || element.getAttribute('title') || '').trim()).length);
-      addCheck(pageConfig, 'functional', 'Interactive controls have names', unlabeled === 0, `${unlabeled} unlabeled links or buttons found.`, 'Links and buttons have visible or accessible names.');
-      if (unlabeled) report.issues.push(addIssue(pageConfig, input.environment, 'accessibility', 'Unnamed interactive control', `${unlabeled} link or button controls do not expose a readable name.`, 'Interactive controls have an accessible name.', `${unlabeled} unnamed controls found.`, 'Medium'));
+      const controlSummary = await target.locator('a[href],button').evaluateAll((elements) => ({
+        count: elements.length,
+        unnamed: elements.filter((element) => !(element.innerText || element.getAttribute('aria-label') || element.getAttribute('title') || '').trim()).length,
+      }));
+      addCheck(pageConfig, 'functional', 'Links and buttons are named', controlSummary.unnamed === 0, `${controlSummary.count} controls checked; ${controlSummary.unnamed} have no accessible name.`, 'Links and buttons have visible or accessible names.');
+      if (controlSummary.unnamed) report.issues.push(addIssue(pageConfig, input.environment, 'functional', 'Unnamed link or button', `${controlSummary.unnamed} interactive controls do not expose a readable name.`, 'Links and buttons have an accessible name.', `${controlSummary.unnamed} unnamed controls among ${controlSummary.count}.`, 'Medium'));
+
+      const expandableButtons = target.locator('button[aria-expanded][type="button"]');
+      const expandableCount = await expandableButtons.count();
+      const interactionFailures = [];
+      for (let index = 0; index < expandableCount; index++) {
+        const button = expandableButtons.nth(index);
+        const before = await button.getAttribute('aria-expanded');
+        if (!before || await button.isDisabled()) continue;
+        try {
+          await button.click();
+          const opened = await button.getAttribute('aria-expanded');
+          if (opened === before) throw new Error('aria-expanded did not change after activation.');
+          await button.click();
+          if (await button.getAttribute('aria-expanded') !== before) throw new Error('aria-expanded did not return to its original state.');
+        } catch (error) {
+          interactionFailures.push(`${(await button.innerText().catch(() => 'Expandable button')).trim()}: ${error.message.split('\n')[0]}`);
+        }
+      }
+      addCheck(pageConfig, 'functional', 'Safe expandable button interactions', interactionFailures.length === 0, expandableCount ? interactionFailures.join('; ') || `${expandableCount} expandable button(s) opened and restored.` : 'No aria-expanded buttons found; interaction check skipped.', 'Non-submit disclosure/menu buttons toggle their expanded state and can be restored.');
+      if (interactionFailures.length) report.issues.push(addIssue(pageConfig, input.environment, 'functional', 'Expandable button interaction failed', 'A disclosure or menu button did not toggle its advertised expanded state.', 'Clicking the control changes aria-expanded and can return to its initial state.', interactionFailures.join('\n'), 'Medium'));
+
+      const formSummary = await target.locator('form').evaluateAll((forms) => {
+        const required = forms.flatMap((form) => [...form.querySelectorAll('input[required],select[required],textarea[required]')]);
+        const unnamedRequired = required.filter((control) => !control.labels?.length && !control.getAttribute('aria-label')).length;
+        const emptyRequired = required.some((control) => !String(control.value || '').trim());
+        return { forms: forms.length, required: required.length, unnamedRequired, emptyRequired, invalidWhenRequiredEmpty: forms.filter((form) => [...form.querySelectorAll('input[required],select[required],textarea[required]')].some((control) => !String(control.value || '').trim())).every((form) => !form.checkValidity()) };
+      });
+      const formsValid = formSummary.unnamedRequired === 0 && (!formSummary.emptyRequired || formSummary.invalidWhenRequiredEmpty);
+      addCheck(pageConfig, 'functional', 'Forms expose safe required-field validation', formsValid, formSummary.forms ? `${formSummary.forms} forms; ${formSummary.required} required fields; ${formSummary.unnamedRequired} required fields without labels.` : 'No forms found; form validation check skipped.', 'Required form fields are labeled and browser validity rejects empty required values.');
+      if (!formsValid) report.issues.push(addIssue(pageConfig, input.environment, 'functional', 'Form validation or labels missing', 'A required form field is unnamed or an empty required form passes browser validity.', 'Required fields are labeled and empty required values fail validity checks.', `${formSummary.unnamedRequired} unnamed required fields; empty required values rejected: ${formSummary.invalidWhenRequiredEmpty}.`, 'Medium'));
     }
 
     if (runTask) {

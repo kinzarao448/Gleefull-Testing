@@ -121,7 +121,7 @@ export function buildIssue({ page, environment, category, title, summary, expect
     severity,
     evidence,
     reproductionSteps: steps,
-    nextAction: category === 'ui' ? 'Review the screenshots against Figma and approve the baseline only if this difference is intentional.' : 'Reproduce on the same URL and inspect the attached browser/network evidence.',
+    nextAction: category === 'ui' ? 'Review the Preview and Live screenshots and visual diff; decide whether the observed difference is intentional.' : 'Reproduce on the reported page and inspect the attached browser/network evidence.',
     status,
   };
 }

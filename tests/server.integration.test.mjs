@@ -54,6 +54,17 @@ test('saved page configuration survives a dashboard process restart', { timeout:
     assert.equal(restored.pages[0].productionUrl, 'https://shop.example.test/c');
     assert.equal(restored.visualThreshold, 0.7);
     assert.equal(restored.historyRetention, 12);
+
+    const pairResponse = await fetch(`${processInfo.base}/api/pairs`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pairs: [{ id: 'homepage', previewUrl: 'https://preview.example.test/', liveUrl: 'https://live.example.test/' }] }) });
+    assert.equal(pairResponse.status, 200);
+    await stop(processInfo.child);
+    processInfo = await launch(port, dataDir);
+    const savedPairs = await fetch(`${processInfo.base}/api/pairs`).then((result) => result.json());
+    assert.equal(savedPairs.length, 1);
+    assert.equal(savedPairs[0].previewUrl, 'https://preview.example.test');
+    assert.equal(savedPairs[0].liveUrl, 'https://live.example.test');
+    const invalidRun = await fetch(`${processInfo.base}/api/pair-runs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pairs: [{ id: 'empty-pair', previewUrl: '', liveUrl: '' }] }) });
+    assert.equal(invalidRun.status, 400);
         
         const runId = 'baseline-path-test';
         const runDirectory = path.join(dataDir, 'runs', runId);

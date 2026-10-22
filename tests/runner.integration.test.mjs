@@ -8,7 +8,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const fixture = (preview, heading = 'Demo product') => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runner demo</title><style>body{margin:0;color:#173c32;font:16px Georgia,serif;background:${preview ? '#e4edce' : '#fff'}}main{min-height:80vh;display:grid;place-content:center;text-align:center;padding:30px}h1{font-size:48px}button{padding:12px 18px;background:#174c39;color:white;border:0;cursor:pointer}</style></head><body><main><h1>${heading}</h1><button onclick="document.querySelector('#state').textContent='Demo item added'">Add to cart</button><p id="state" aria-live="polite"></p></main></body></html>`;
+const fixture = (preview, heading = 'Demo product', brokenExpandable = false) => {
+  const toggle = brokenExpandable ? 'void(0)' : "this.setAttribute('aria-expanded',this.getAttribute('aria-expanded')==='true'?'false':'true')";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Runner demo</title><style>body{margin:0;color:#173c32;font:16px Georgia,serif;background:${preview ? '#e4edce' : '#fff'}}main{min-height:80vh;display:grid;place-content:center;text-align:center;padding:30px}h1{font-size:48px}button{padding:12px 18px;background:#174c39;color:white;border:0;cursor:pointer}</style></head><body><main><h1>${heading}</h1><button onclick="document.querySelector('#state').textContent='Demo item added'">Add to cart</button><button type="button" aria-expanded="false" onclick="${toggle}">Toggle details</button><p id="state" aria-live="polite"></p></main></body></html>`;
+};
 
 function runRunner(inputPath, { cancelAfterMs } = {}) {
   return new Promise((resolve, reject) => {
@@ -33,7 +36,7 @@ test('runner creates pixel diff evidence and reports an explicit task failure', 
       return;
     }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(fixture(request.url === '/changed', request.url === '/content-reference' ? 'Older product copy' : 'Demo product'));
+    response.end(fixture(request.url === '/changed', request.url === '/content-reference' ? 'Older product copy' : 'Demo product', request.url === '/broken-controls'));
   });
   let temporary;
   try {
@@ -108,6 +111,16 @@ test('runner creates pixel diff evidence and reports an explicit task failure', 
   assert.ok(contentIssue, 'Live/target content difference should create an issue');
   assert.match(contentIssue.actual, /Older product copy/);
   assert.equal(contentIssue.category, 'functional');
+
+  const controlRunId = `${runId}-control`;
+  const controlDir = path.join(temporary, 'runs', controlRunId);
+  await fs.mkdir(path.join(controlDir, 'artifacts'), { recursive: true });
+  const controlPage = { ...page, previewUrl: `${base}/broken-controls` };
+  await fs.writeFile(path.join(controlDir, 'input.json'), JSON.stringify({ ...input, runId: controlRunId, mode: 'functional', pages: [controlPage], accessibility: false }));
+  const controlResult = await runRunner(path.join(controlDir, 'input.json'));
+  assert.equal(controlResult.status, 0, controlResult.stderr || controlResult.stdout);
+  const controlReport = JSON.parse(await fs.readFile(path.join(controlDir, 'report.json'), 'utf8'));
+  assert.ok(controlReport.pages[0].issues.some((issue) => issue.title === 'Expandable button interaction failed'));
 
   const taskRunId = `${runId}-task`;
   const taskDir = path.join(temporary, 'runs', taskRunId);
